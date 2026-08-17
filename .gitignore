@@ -1,0 +1,5 @@
+*.exe
+http-qps-cli
+http-qps/web/http-qps-web
+*.tar.gz
+*.zip
