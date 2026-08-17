@@ -1,6 +1,6 @@
-# HTTP QPS Load Tester
+# CC TOOLS - HTTP QPS Load Tester
 
-HTTP 压力测试工具，支持 CLI 和 Web 两种模式。
+HTTP 压力测试工具，支持 CLI 和 Web 两种模式。静态编译，无 glibc 依赖，兼容所有 Linux 发行版。
 
 ## 功能
 
@@ -11,10 +11,18 @@ HTTP 压力测试工具，支持 CLI 和 Web 两种模式。
 - Web 模式：浏览器操作，实时 SSE 推送统计
 - 实时 QPS 折线图（Canvas）
 - 状态码分布条 + 图例
-- 响应日志实时滚动
+- 响应日志实时滚动（含时间戳）
 - 任务管理（多任务并行、启动/停止）
 - CSV 详细记录下载
 - 登录认证
+
+## 快速使用
+
+```bash
+chmod +x http-qps-web-linux-amd64
+./http-qps-web-linux-amd64 -port 8080
+# 浏览器访问 http://<ip>:8080
+```
 
 ## CLI 版本
 
@@ -51,8 +59,6 @@ HTTP 压力测试工具，支持 CLI 和 Web 两种模式。
 # 浏览器访问 http://<ip>:8080
 ```
 
-默认登录：`jdsec` / `jdsec001`
-
 ### API
 
 | 方法 | 路径 | 说明 |
@@ -67,12 +73,11 @@ HTTP 压力测试工具，支持 CLI 和 Web 两种模式。
 ## 编译
 
 ```bash
-# CLI
-cd /path/to/http-qps
+# CLI（静态编译，无 glibc 依赖）
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o http-qps-cli .
 
 # Web
-cd /path/to/http-qps/web
+cd web
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o http-qps-web .
 ```
 
@@ -81,6 +86,9 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o http-qps-web 
 ```
 ├── main.go          # CLI 入口
 ├── go.mod
+├── release/
+│   ├── http-qps-cli-linux-amd64
+│   └── http-qps-web-linux-amd64
 ├── web/
 │   ├── main.go      # Web 服务入口 + 前端页面
 │   ├── engine.go    # 压测引擎
