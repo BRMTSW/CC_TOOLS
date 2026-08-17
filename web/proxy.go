@@ -55,7 +55,7 @@ type ProxyManager struct {
 
 // NewProxyManager creates a ProxyManager and loads persisted data
 func NewProxyManager() *ProxyManager {
-	// Determine data directory: same as the binary
+	// Use binary's directory as data dir (stable regardless of cwd)
 	exePath, _ := os.Executable()
 	dataDir := filepath.Dir(exePath)
 
@@ -65,6 +65,7 @@ func NewProxyManager() *ProxyManager {
 		dataDir: dataDir,
 	}
 	pm.load()
+	log.Printf("proxy data dir: %s", dataDir)
 	return pm
 }
 
@@ -137,9 +138,9 @@ func (pm *ProxyManager) AddProxy(p *SSHProxy) (*SSHProxy, error) {
 // UpdateProxy updates an existing proxy config
 func (pm *ProxyManager) UpdateProxy(id string, p *SSHProxy) error {
 	pm.mu.Lock()
-	defer pm.mu.Unlock()
 	existing, ok := pm.proxies[id]
 	if !ok {
+		pm.mu.Unlock()
 		return fmt.Errorf("proxy not found")
 	}
 	if p.Name != "" {
@@ -160,14 +161,12 @@ func (pm *ProxyManager) UpdateProxy(id string, p *SSHProxy) error {
 	}
 	pm.mu.Unlock()
 	pm.save()
-	pm.mu.Lock() // re-lock for defer
 	return nil
 }
 
 // DeleteProxy removes a proxy config and stops any active connection
 func (pm *ProxyManager) DeleteProxy(id string) error {
 	pm.mu.Lock()
-	defer pm.mu.Unlock()
 	if ap, ok := pm.active[id]; ok {
 		ap.cancel()
 		ap.cmd.Process.Kill()
@@ -177,7 +176,6 @@ func (pm *ProxyManager) DeleteProxy(id string) error {
 	delete(pm.proxies, id)
 	pm.mu.Unlock()
 	pm.save()
-	pm.mu.Lock()
 	return nil
 }
 

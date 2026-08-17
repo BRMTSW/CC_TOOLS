@@ -1,8 +1,8 @@
 [
   {
-    "id": "d08f2269",
-    "name": "test-persist",
-    "host": "1.2.3.4",
+    "id": "709e9339",
+    "name": "TestNode",
+    "host": "10.0.0.1",
     "port": 22,
     "username": "root",
     "password": "pass123",
