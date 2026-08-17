@@ -1,0 +1,11 @@
+[
+  {
+    "id": "d08f2269",
+    "name": "test-persist",
+    "host": "1.2.3.4",
+    "port": 22,
+    "username": "root",
+    "password": "pass123",
+    "hasPass": true
+  }
+]

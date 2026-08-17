@@ -3,13 +3,18 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"time"
 )
+
+const proxyDataFile = "proxies.json"
 
 // SSHProxy defines a remote SSH server used as an HTTP proxy
 type SSHProxy struct {
@@ -18,8 +23,8 @@ type SSHProxy struct {
 	Host     string `json:"host"`
 	Port     int    `json:"port"`
 	Username string `json:"username"`
-	Password string `json:"password,omitempty"` // masked in list responses
-	HasPass  bool   `json:"hasPass"`            // indicates password is set
+	Password string `json:"password,omitempty"`
+	HasPass  bool   `json:"hasPass"`
 }
 
 // MaskPassword returns a copy with password masked
@@ -45,13 +50,61 @@ type ProxyManager struct {
 	mu      sync.RWMutex
 	proxies map[string]*SSHProxy
 	active  map[string]*activeProxy
+	dataDir string
 }
 
-// NewProxyManager creates a ProxyManager
+// NewProxyManager creates a ProxyManager and loads persisted data
 func NewProxyManager() *ProxyManager {
-	return &ProxyManager{
+	// Determine data directory: same as the binary
+	exePath, _ := os.Executable()
+	dataDir := filepath.Dir(exePath)
+
+	pm := &ProxyManager{
 		proxies: make(map[string]*SSHProxy),
-		active:  make(map[string]*activeProxy),
+		active: make(map[string]*activeProxy),
+		dataDir: dataDir,
+	}
+	pm.load()
+	return pm
+}
+
+// load reads proxy configs from JSON file
+func (pm *ProxyManager) load() {
+	path := filepath.Join(pm.dataDir, proxyDataFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return // file not found is ok
+	}
+	var list []SSHProxy
+	if err := json.Unmarshal(data, &list); err != nil {
+		log.Printf("proxy load failed: %v", err)
+		return
+	}
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	for i := range list {
+		pm.proxies[list[i].ID] = &list[i]
+	}
+	log.Printf("loaded %d proxy configs", len(list))
+}
+
+// save writes proxy configs to JSON file
+func (pm *ProxyManager) save() {
+	pm.mu.RLock()
+	list := make([]SSHProxy, 0, len(pm.proxies))
+	for _, p := range pm.proxies {
+		list = append(list, *p)
+	}
+	pm.mu.RUnlock()
+
+	data, err := json.MarshalIndent(list, "", "  ")
+	if err != nil {
+		log.Printf("proxy marshal failed: %v", err)
+		return
+	}
+	path := filepath.Join(pm.dataDir, proxyDataFile)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		log.Printf("proxy save failed: %v", err)
 	}
 }
 
@@ -75,8 +128,9 @@ func (pm *ProxyManager) AddProxy(p *SSHProxy) (*SSHProxy, error) {
 	p.HasPass = p.Password != ""
 
 	pm.mu.Lock()
-	defer pm.mu.Unlock()
 	pm.proxies[p.ID] = p
+	pm.mu.Unlock()
+	pm.save()
 	return p, nil
 }
 
@@ -104,6 +158,9 @@ func (pm *ProxyManager) UpdateProxy(id string, p *SSHProxy) error {
 		existing.Password = p.Password
 		existing.HasPass = true
 	}
+	pm.mu.Unlock()
+	pm.save()
+	pm.mu.Lock() // re-lock for defer
 	return nil
 }
 
@@ -118,6 +175,9 @@ func (pm *ProxyManager) DeleteProxy(id string) error {
 		delete(pm.active, id)
 	}
 	delete(pm.proxies, id)
+	pm.mu.Unlock()
+	pm.save()
+	pm.mu.Lock()
 	return nil
 }
 
@@ -150,7 +210,6 @@ func (pm *ProxyManager) StartProxy(proxyID string) (int, error) {
 	}
 	pm.mu.RUnlock()
 
-	// Check if already running
 	pm.mu.RLock()
 	if ap, ok := pm.active[proxyID]; ok {
 		localPort := ap.localPort
@@ -159,7 +218,6 @@ func (pm *ProxyManager) StartProxy(proxyID string) (int, error) {
 	}
 	pm.mu.RUnlock()
 
-	// Find a free local port
 	localPort, err := getFreePort()
 	if err != nil {
 		return 0, fmt.Errorf("no free port: %w", err)
@@ -167,7 +225,6 @@ func (pm *ProxyManager) StartProxy(proxyID string) (int, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -D LOCAL_PORT -N user@host -p SSH_PORT
 	cmd := exec.CommandContext(ctx,
 		"sshpass", "-e",
 		"ssh",
@@ -181,13 +238,11 @@ func (pm *ProxyManager) StartProxy(proxyID string) (int, error) {
 	)
 	cmd.Env = append(cmd.Env, fmt.Sprintf("SSHPASS=%s", p.Password))
 
-	// Start SSH process
 	if err := cmd.Start(); err != nil {
 		cancel()
 		return 0, fmt.Errorf("ssh start failed: %w", err)
 	}
 
-	// Wait for SOCKS5 port to be reachable
 	if err := waitForPort(ctx, "127.0.0.1", localPort, 10*time.Second); err != nil {
 		cmd.Process.Kill()
 		cmd.Wait()
@@ -204,7 +259,6 @@ func (pm *ProxyManager) StartProxy(proxyID string) (int, error) {
 	}
 	pm.mu.Unlock()
 
-	// Monitor process exit
 	go func() {
 		err := cmd.Wait()
 		pm.mu.Lock()
@@ -285,14 +339,12 @@ func (pm *ProxyManager) TestProxy(proxyID string) error {
 		return fmt.Errorf("ssh connect failed: %w", err)
 	}
 
-	// Wait for SOCKS port
 	err = waitForPort(ctx, "127.0.0.1", localPort, 10*time.Second)
 	cmd.Process.Kill()
 	cmd.Wait()
 	return err
 }
 
-// getFreePort returns a free TCP port on localhost
 func getFreePort() (int, error) {
 	addr, err := net.ResolveTCPAddr("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -307,7 +359,6 @@ func getFreePort() (int, error) {
 	return port, nil
 }
 
-// waitForPort repeatedly tries to connect to addr:port until success or timeout
 func waitForPort(ctx context.Context, host string, port int, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	addr := fmt.Sprintf("%s:%d", host, port)
